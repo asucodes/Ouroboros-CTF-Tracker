@@ -6,6 +6,8 @@ Brutal, minimalist countdown timer designed to fight sunk-cost fallacy during CT
 
 ![Ouroboros Logo](assets/ouroboros_logo_small.png)
 
+**GitHub**: [asucodes/Ouroboros-CTF-Tracker](https://github.com/asucodes/Ouroboros-CTF-Tracker)
+
 ## Features
 
 - **Two modes**
@@ -23,6 +25,13 @@ Brutal, minimalist countdown timer designed to fight sunk-cost fallacy during CT
 - **Persistence**: On exit (or manual Export), dumps `ctf_session_YYYY-MM-DD.md` in current directory.
 
 ## Install & Run (Development)
+
+Clone from GitHub:
+
+```bash
+git clone https://github.com/asucodes/Ouroboros-CTF-Tracker.git
+cd Ouroboros-CTF-Tracker
+```
 
 On Debian/Ubuntu-based distros first install Tk:
 
@@ -48,6 +57,8 @@ CTF_TIMER_SCALE=1.5 python3 ctf_timer.py
 The application now defaults to 1.35× scaling. Change the default in `main()` or keep using the `CTF_TIMER_SCALE` environment variable.
 
 ## Build Standalone Executable (Linux)
+
+Get the source (or use the clone above):
 
 **Prerequisite:**
 
