@@ -149,6 +149,8 @@ class CTFTimerApp(ctk.CTk):
         """Scale the big timer font based on the actual timer container size for perfect fit and centering."""
         if not hasattr(self, 'timer_frame') or not self.timer_frame.winfo_exists():
             return
+        if getattr(self, 'timed_out', False) and self.remaining_seconds <= 0:
+            return  # keep quote font during timeout
         try:
             tw = self.timer_frame.winfo_width()
             th = self.timer_frame.winfo_height()
