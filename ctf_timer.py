@@ -25,8 +25,8 @@ BG = "#121212"
 TEXT_MUTED = "#888888"
 TEXT_LIGHT = "#e5e5e5"
 ACCENT_BLUE = "#2563eb"       # Flag Captured
-ACCENT_AMBER = "#d97706"      # +5 Min
-ACCENT_CRIMSON = "#b91c1c"    # Timeout / harsh
+ACCENT_AMBER = "#a78bfa"      # +5 Min (light purple)
+ACCENT_CRIMSON = "#7c3aed"    # Timeout / harsh (purple)
 ACCENT_GHOST = "#6b7280"      # Drop & Flag
 SIDEBAR_BG = "#1a1a1a"
 ENTRY_BG = "#1f1f1f"
@@ -36,12 +36,6 @@ EGO_LINES: List[str] = [
     "The server returned False. It is not personal. Move on.",
     "Your ego is burning the clock. Next category.",
     "You are evaluating a bad assumption. Leave it in the Ghosts list.",
-    "Time is the only resource you cannot farm back. Pivot.",
-    "The flag is not in this box. Walk away.",
-    "Persistence is a virtue until it is a vice. Stop.",
-    "You already know the answer: it's time to switch targets.",
-    "Every minute here is a minute not spent on the next problem.",
-    "The exploit path is probably in a different service. Move.",
 ]
 
 
@@ -368,17 +362,19 @@ class CTFTimerApp(ctk.CTk):
         bottom.grid(row=7, column=0, sticky="ew", pady=(14, 0))
 
         self.topmost_var = ctk.BooleanVar(value=False)
-        self.topmost_switch = ctk.CTkSwitch(
+        self.topmost_btn = ctk.CTkButton(
             bottom,
-            text="Always on Top",
-            font=ctk.CTkFont(family="monospace", size=10),
-            text_color=TEXT_MUTED,
-            variable=self.topmost_var,
-            command=self._toggle_topmost,
-            width=45,
-            height=22
+            text="",
+            width=30,
+            height=18,
+            fg_color="#4b5563",  # off
+            hover_color="#6b7280",
+            command=self._toggle_topmost
         )
-        self.topmost_switch.grid(row=0, column=0, sticky="w")
+        self.topmost_btn.grid(row=0, column=0, sticky="w", padx=(0, 5))
+
+        if self.topmost_var.get():
+            self.topmost_btn.configure(fg_color=ACCENT_AMBER)
 
         self.status_label = ctk.CTkLabel(
             bottom,
@@ -475,11 +471,18 @@ class CTFTimerApp(ctk.CTk):
         self._highlight_mode()
 
     def _toggle_topmost(self):
-        val = self.topmost_var.get()
+        val = not self.topmost_var.get()
+        self.topmost_var.set(val)
         self.attributes("-topmost", val)
+        if val:
+            self.topmost_btn.configure(fg_color=ACCENT_AMBER)  # light purple on
+        else:
+            self.topmost_btn.configure(fg_color="#4b5563")  # off gray
 
     # ------------------- TIMER CORE -------------------
     def _update_timer_display(self, force_color: Optional[str] = None):
+        if getattr(self, 'timed_out', False) and self.remaining_seconds <= 0:
+            return  # quote is shown in timer area during timeout
         text = self._format_time(self.remaining_seconds)
         color = force_color or (ACCENT_CRIMSON if self.remaining_seconds <= 0 and not self.is_running else TEXT_MUTED)
         self.timer_label.configure(text=text, text_color=color)
@@ -720,19 +723,22 @@ class CTFTimerApp(ctk.CTk):
             self.after_cancel(self._tick_job)
             self._tick_job = None
 
-        # Visual: harsh red + 00:00 (do NOT auto-add to ghosts; let user decide)
+        # Visual: show quote in the timer area (where timer is displayed)
         self.remaining_seconds = 0
         self.timed_out = True
-        self._update_timer_display(force_color=ACCENT_CRIMSON)
+        quote = random.choice(EGO_LINES)
+        # Use a readable size for the quote in the box
+        self.timer_label.configure(
+            text=quote,
+            text_color=ACCENT_CRIMSON,
+            font=ctk.CTkFont(family="monospace", size=16, weight="bold")
+        )
         self._update_action_buttons()
 
         # Play sound
         self._play_buzzer()
 
-        # Start blinking the zero
-        self._start_blink()
-
-        # Lock UI + modal overlay for 3 seconds
+        # Lock UI + modal overlay 
         self._show_ego_overlay()
 
     def _show_ego_overlay(self):
@@ -759,33 +765,22 @@ class CTFTimerApp(ctk.CTk):
         inner = ctk.CTkFrame(overlay, fg_color=BG)
         inner.pack(expand=True, fill="both", padx=30, pady=25)
 
-        # Content - larger fonts for readability
+        # Content - larger, minimal, no quote here (quote shown in main timer area)
         title = ctk.CTkLabel(
             inner,
             text="⏱  TIME'S UP",
-            font=ctk.CTkFont(family="monospace", size=26, weight="bold"),
+            font=ctk.CTkFont(family="monospace", size=28, weight="bold"),
             text_color=ACCENT_CRIMSON
         )
-        title.pack(pady=(0, 10))
+        title.pack(pady=(10, 5))
 
-        message = random.choice(EGO_LINES)
-        msg_label = ctk.CTkLabel(
+        sub = ctk.CTkLabel(
             inner,
-            text=message,
-            font=ctk.CTkFont(family="monospace", size=14),
-            text_color=TEXT_LIGHT,
-            wraplength=popup_width - 120,
-            justify="center"
+            text="4 seconds to detach.",
+            font=ctk.CTkFont(family="monospace", size=16),
+            text_color=TEXT_LIGHT
         )
-        msg_label.pack(pady=(0, 15), padx=15)
-
-        hint = ctk.CTkLabel(
-            inner,
-            text="4 second circuit breaker active.",
-            font=ctk.CTkFont(size=11),
-            text_color=TEXT_MUTED
-        )
-        hint.pack()
+        sub.pack(pady=(5, 10))
 
         # Auto close + re-enable (keep timer at 00:00 blinking, allow user to act)
         def finish():
@@ -794,6 +789,13 @@ class CTFTimerApp(ctk.CTk):
             except Exception:
                 pass
             self._set_all_controls_disabled(False)
+            # set back to 00:00 in timer area
+            self.timer_label.configure(
+                text="00:00",
+                text_color=ACCENT_CRIMSON,
+                font=ctk.CTkFont(family="monospace", size=60, weight="bold")  # will be resized
+            )
+            self._start_blink()
             # restore correct per-state button enables (post-timeout allows actions)
             self._update_action_buttons()
             # Do NOT reset or clear target.
@@ -808,7 +810,7 @@ class CTFTimerApp(ctk.CTk):
                     self.mode_btn_20, self.mode_btn_10):
             btn.configure(state=state)
         self.target_entry.configure(state=state)
-        self.topmost_switch.configure(state=state)
+        self.topmost_btn.configure(state=state)
 
     # ------------------- SIDEBAR -------------------
     def _refresh_sidebar(self):
