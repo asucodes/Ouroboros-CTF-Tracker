@@ -30,6 +30,9 @@ python3 -m PyInstaller \
     --add-data "assets:assets" \
     ctf_timer.py
 
+# Stage the .desktop file so users have it ready for desktop integration
+cp ouroboros.desktop dist/ 2>/dev/null || true
+
 echo ""
 echo "==> Build complete!"
 echo "Executable: dist/ouroboros-ctf-tracker"
@@ -39,4 +42,7 @@ echo ""
 echo "Install system-wide (optional):"
 echo "  sudo install -Dm755 dist/ouroboros-ctf-tracker /usr/local/bin/ouroboros-ctf-tracker"
 echo ""
-ls -lh dist/ouroboros-ctf-tracker || true
+echo "For proper Linux desktop integration (launcher icon + name 'Ouroboros', not 'Tk'):"
+echo "  See the 'Desktop Integration on Linux' section in README.md"
+echo ""
+ls -lh dist/ouroboros-ctf-tracker dist/ouroboros.desktop 2>/dev/null || true

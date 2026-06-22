@@ -75,6 +75,36 @@ Install globally (optional):
 sudo install -Dm755 dist/ouroboros-ctf-tracker /usr/local/bin/ouroboros-ctf-tracker
 ```
 
+### Desktop Integration on Linux (recommended)
+
+The raw binary works, but to make the app appear in your Linux launcher / app menu / dock
+with the **correct name "Ouroboros: CTF Tracker"** and the Ouroboros logo (instead of
+appearing as "Tk" with a generic icon), install a desktop entry:
+
+```bash
+# 1. Ensure the binary is in your PATH (user-local is recommended)
+mkdir -p ~/.local/bin
+cp dist/ouroboros-ctf-tracker ~/.local/bin/
+# (most distros already include ~/.local/bin in PATH for user sessions)
+
+# 2. Install the icon
+mkdir -p ~/.local/share/icons/hicolor/256x256/apps
+cp assets/ouroboros_logo_256.png ~/.local/share/icons/hicolor/256x256/apps/ouroboros.png
+
+# 3. Install the .desktop file (ships with the build)
+mkdir -p ~/.local/share/applications
+cp dist/ouroboros.desktop ~/.local/share/applications/
+
+# 4. Refresh the desktop database
+update-desktop-database ~/.local/share/applications/
+
+# 5. (Optional) log out and back in, or just run the app from the launcher
+```
+
+After this the app will show up properly named with the logo in GNOME, KDE, etc.
+
+For a system-wide install use the global binary path + `sudo` for the icon and .desktop locations.
+
 ## Colors (per spec)
 
 - Background: `#121212`

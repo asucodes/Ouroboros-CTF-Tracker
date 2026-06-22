@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Ouroboros: CTF Tracker
+Comment=Brutal minimalist CTF timer to break sunk-cost cycles
+GenericName=CTF Timer
+Exec=ouroboros-ctf-tracker
+Icon=ouroboros
+Terminal=false
+Categories=Utility;Development;
+StartupWMClass=Ouroboros
+Keywords=ctf;timer;tracker;pentest;security;

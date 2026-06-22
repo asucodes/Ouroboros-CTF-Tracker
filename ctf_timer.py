@@ -81,6 +81,15 @@ class CTFTimerApp(ctk.CTk):
         except Exception:
             pass
 
+        # Set WM_CLASS + icon name so Linux desktop environments, docks,
+        # alt-tab and .desktop files recognize the app as "Ouroboros"
+        # instead of the default "Tk".
+        try:
+            self.wm_class("Ouroboros", "Ouroboros")
+            self.wm_iconname("Ouroboros: CTF Tracker")
+        except Exception:
+            pass
+
         # State
         self.default_seconds: int = 20 * 60
         self.remaining_seconds: int = 20 * 60
