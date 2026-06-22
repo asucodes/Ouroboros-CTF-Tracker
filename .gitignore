@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+
+# Build artifacts (users run build_linux.sh themselves)
+build/
+dist/
+*.spec
+
+# User data
+ctf_session_*.md
+*.wav
+/tmp/ctf_*
+
+# Virtualenvs
+.venv/
+env/
