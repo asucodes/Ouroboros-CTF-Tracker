@@ -25,8 +25,8 @@ BG = "#121212"
 TEXT_MUTED = "#888888"
 TEXT_LIGHT = "#e5e5e5"
 ACCENT_BLUE = "#2563eb"       # Flag Captured
-ACCENT_AMBER = "#a78bfa"      # +5 Min (light purple)
-ACCENT_CRIMSON = "#7c3aed"    # Timeout / harsh (purple)
+ACCENT_AMBER = "#d97706"      # +5 Min (orange)
+ACCENT_CRIMSON = "#b91c1c"    # Timeout / harsh (crimson)
 ACCENT_GHOST = "#6b7280"      # Drop & Flag
 SIDEBAR_BG = "#1a1a1a"
 ENTRY_BG = "#1f1f1f"
@@ -52,6 +52,13 @@ class CTFTimerApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
+        # Set app class name *very early* so Linux (and some other) window managers
+        # and launchers see "Ouroboros" instead of "Tk" for the icon/name.
+        try:
+            self.tk.call('wm', 'class', self._w, 'Ouroboros')
+        except Exception:
+            pass
+
         # Force Tk scaling as early as possible (helps on some Linux setups)
         try:
             import os
@@ -61,7 +68,17 @@ class CTFTimerApp(ctk.CTk):
             pass
 
         self.title("Ouroboros: CTF Tracker")
-        self.geometry("1080x680")
+
+        # Auto-choose a good initial window size based on screen for best timer display
+        # (avoids tiny font or cutoff on launch/fullscreen scenarios)
+        self.update_idletasks()
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        width = max(920, min(int(screen_width * 0.65), 1400))
+        height = max(580, min(int(screen_height * 0.70), 900))
+        x = (screen_width - width) // 2
+        y = (screen_height - height) // 2
+        self.geometry(f"{width}x{height}+{x}+{y}")
         self.minsize(920, 580)
         self.configure(fg_color=BG)
 
@@ -92,6 +109,9 @@ class CTFTimerApp(ctk.CTk):
         except Exception:
             pass
 
+        # Re-apply a bit later to ensure it sticks (helps some WMs and after mapping)
+        self.after(150, lambda: self.tk.call('wm', 'class', self._w, 'Ouroboros') if hasattr(self, '_w') else None)
+
         # State
         self.default_seconds: int = 20 * 60
         self.remaining_seconds: int = 20 * 60
@@ -108,11 +128,13 @@ class CTFTimerApp(ctk.CTk):
         self._tick_job: Optional[str] = None
         self.timed_out: bool = False
         self._blink_job: Optional[str] = None
+        self.current_overlay = None
 
         self._ensure_buzzer()
         self._ensure_success_sound()
         self._ensure_drop_sound()
         self._ensure_plus5_sound()
+        self._ensure_start_sound()
 
         # UI Setup
         self._setup_ui()
@@ -154,11 +176,18 @@ class CTFTimerApp(ctk.CTk):
         try:
             tw = self.timer_frame.winfo_width()
             th = self.timer_frame.winfo_height()
-            if tw < 20 or th < 20:
+            if tw < 50 or th < 50:
                 return
-            # "20:00" ~5 chars. Conservative to ensure it always fits inside the box with margin.
-            # Use ~70% width / 6 for chars, 60% height.
-            font_size = max(20, min(200, int((tw * 0.70) / 6.0), int(th * 0.60)))
+            # Find largest size where "10:00" (5 chars) fits with margin using actual font metrics.
+            # This prevents cutoff/overflow on resize or full screen.
+            font_size = 20
+            for sz in range(min(180, int(th * 0.65)), 19, -1):
+                f = tk.font.Font(family="monospace", size=sz, weight="bold")
+                text_w = f.measure("10:00")
+                text_h = sz * 1.2
+                if text_w < tw * 0.88 and text_h < th * 0.75:
+                    font_size = sz
+                    break
             self.timer_label.configure(
                 font=ctk.CTkFont(family="monospace", size=font_size, weight="bold")
             )
@@ -296,11 +325,11 @@ class CTFTimerApp(ctk.CTk):
         timer_frame.grid_rowconfigure(0, weight=1)
         timer_frame.grid_rowconfigure(1, weight=0)  # active label small
 
-        # Temporary font; will be resized dynamically
+        # Temporary font; will be resized dynamically to fit
         self.timer_label = ctk.CTkLabel(
             timer_frame,
             text="20:00",
-            font=ctk.CTkFont(family="monospace", size=60, weight="bold"),
+            font=ctk.CTkFont(family="monospace", size=40, weight="bold"),
             text_color=TEXT_MUTED,
             justify="center",
             anchor="center"
@@ -477,7 +506,7 @@ class CTFTimerApp(ctk.CTk):
         self.topmost_var.set(val)
         self.attributes("-topmost", val)
         if val:
-            self.topmost_btn.configure(fg_color=ACCENT_AMBER)  # light purple on
+            self.topmost_btn.configure(fg_color=ACCENT_AMBER)  # orange on
         else:
             self.topmost_btn.configure(fg_color="#4b5563")  # off gray
 
@@ -594,11 +623,20 @@ class CTFTimerApp(ctk.CTk):
         if self._blink_job:
             self.after_cancel(self._blink_job)
             self._blink_job = None
+        if getattr(self, 'current_overlay', None):
+            try:
+                self.current_overlay.destroy()
+            except Exception:
+                pass
+            self.current_overlay = None
 
         self._set_active_display(f"▶ {self.current_target}")
         self._update_timer_display()
         self._update_action_buttons()
         self.status_label.configure(text="")
+
+        # Play start sound
+        self._play_start_sound()
 
         # Start ticking
         self._schedule_tick()
@@ -630,6 +668,12 @@ class CTFTimerApp(ctk.CTk):
             self.after_cancel(self._blink_job)
             self._blink_job = None
         self.timed_out = False
+        if self.current_overlay:
+            try:
+                self.current_overlay.destroy()
+            except Exception:
+                pass
+            self.current_overlay = None
 
         # Reset visual timer to current mode default for next run
         self.remaining_seconds = self.default_seconds
@@ -649,6 +693,12 @@ class CTFTimerApp(ctk.CTk):
         if self._blink_job:
             self.after_cancel(self._blink_job)
             self._blink_job = None
+        if self.current_overlay:
+            try:
+                self.current_overlay.destroy()
+            except Exception:
+                pass
+            self.current_overlay = None
 
     # ------------------- ACTIONS -------------------
     def add_five_minutes(self):
@@ -669,6 +719,14 @@ class CTFTimerApp(ctk.CTk):
         self._play_plus5_sound()
         self.status_label.configure(text="+5 added (locked for this problem)", text_color=ACCENT_AMBER)
         self.after(1600, lambda: self.status_label.configure(text="") if not (self.is_running or self.timed_out) else None)
+
+        # Auto close the timeout banner if user takes action
+        if getattr(self, 'current_overlay', None):
+            try:
+                self.current_overlay.destroy()
+            except Exception:
+                pass
+            self.current_overlay = None
 
     def flag_captured(self):
         if not (self.is_running or getattr(self, 'timed_out', False)):
@@ -691,6 +749,14 @@ class CTFTimerApp(ctk.CTk):
         self.stop_timer(clear_current=True)
         self._update_timer_display()  # reset color
 
+        # Auto close the timeout banner if user takes action
+        if getattr(self, 'current_overlay', None):
+            try:
+                self.current_overlay.destroy()
+            except Exception:
+                pass
+            self.current_overlay = None
+
     def drop_and_flag(self):
         if not (self.is_running or getattr(self, 'timed_out', False)):
             return
@@ -712,6 +778,14 @@ class CTFTimerApp(ctk.CTk):
         self.stop_timer(clear_current=True)
         self._update_timer_display()
 
+        # Auto close the timeout banner if user takes action
+        if getattr(self, 'current_overlay', None):
+            try:
+                self.current_overlay.destroy()
+            except Exception:
+                pass
+            self.current_overlay = None
+
     def _get_elapsed_seconds(self) -> int:
         if self.problem_start_time:
             return max(0, int(time.time() - self.problem_start_time))
@@ -729,67 +803,75 @@ class CTFTimerApp(ctk.CTk):
         self.remaining_seconds = 0
         self.timed_out = True
         quote = random.choice(EGO_LINES)
-        # Use a readable size for the quote in the box
+        # Make sure full quote is visible: wrap to box width, readable size
+        tw = self.timer_frame.winfo_width() or 500
         self.timer_label.configure(
             text=quote,
             text_color=ACCENT_CRIMSON,
-            font=ctk.CTkFont(family="monospace", size=16, weight="bold")
+            font=ctk.CTkFont(family="monospace", size=15, weight="bold"),
+            wraplength=tw - 30
         )
         self._update_action_buttons()
 
         # Play sound
         self._play_buzzer()
 
-        # Lock UI + modal overlay 
+        # Show the overlay banner (non-modal, does not block action buttons)
         self._show_ego_overlay()
 
     def _show_ego_overlay(self):
-        # Disable everything hard
-        self._set_all_controls_disabled(True)
+        # Do NOT disable action buttons (flag, +5, drop) -- user can use them with banner visible
+        # Only disable start/modes/entry 
+        self.start_btn.configure(state="disabled")
+        self.target_entry.configure(state="disabled")
+        self.mode_btn_20.configure(state="disabled")
+        self.mode_btn_10.configure(state="disabled")
 
         overlay = ctk.CTkToplevel(self)
         overlay.overrideredirect(True)
         overlay.attributes("-topmost", True)
         overlay.configure(fg_color=BG)
 
-        # Larger size, scaled for HiDPI, centered on screen for prominent "windowed fullscreen" feel
+        self.current_overlay = overlay
+
+        # Top banner attached to this app window (small height so it doesn't cover action buttons)
+        # Scaled for HiDPI. Stays until manually closed.
         scale = float(os.environ.get("CTF_TIMER_SCALE", "1.35"))
-        popup_width = int(800 * scale)
-        popup_height = int(340 * scale)
+        popup_width = int(self.winfo_width() * 0.95)
+        popup_height = int(80 * scale)
         self.update_idletasks()
-        screen_w = self.winfo_screenwidth()
-        screen_h = self.winfo_screenheight()
-        x = (screen_w - popup_width) // 2
-        y = (screen_h - popup_height) // 2
-        overlay.geometry(f"{popup_width}x{popup_height}+{x}+{y}")
+        app_x = self.winfo_x()
+        app_y = self.winfo_y()
+        overlay.geometry(f"{popup_width}x{popup_height}+{app_x}+{app_y}")
 
         # Use inner frame for better alignment/padding
         inner = ctk.CTkFrame(overlay, fg_color=BG)
-        inner.pack(expand=True, fill="both", padx=30, pady=25)
+        inner.pack(expand=True, fill="both", padx=20, pady=10)
 
-        # Content - larger, minimal, no quote here (quote shown in main timer area)
+        # Content - minimal, no quote (quote shown in main timer area below)
         title = ctk.CTkLabel(
             inner,
             text="⏱  TIME'S UP",
-            font=ctk.CTkFont(family="monospace", size=28, weight="bold"),
+            font=ctk.CTkFont(family="monospace", size=22, weight="bold"),
             text_color=ACCENT_CRIMSON
         )
-        title.pack(pady=(10, 5))
+        title.pack(pady=(0, 4))
 
         sub = ctk.CTkLabel(
             inner,
-            text="4 seconds to detach.",
-            font=ctk.CTkFont(family="monospace", size=16),
+            text="4 second circuit breaker active.",
+            font=ctk.CTkFont(family="monospace", size=13),
             text_color=TEXT_LIGHT
         )
-        sub.pack(pady=(5, 10))
+        sub.pack(pady=(0, 8))
 
-        # Auto close + re-enable (keep timer at 00:00 blinking, allow user to act)
-        def finish():
+        # Manual close only - no auto after
+        def finish(overlay_widget):
             try:
-                overlay.destroy()
+                overlay_widget.destroy()
             except Exception:
                 pass
+            self.current_overlay = None
             self._set_all_controls_disabled(False)
             # set back to 00:00 in timer area
             self.timer_label.configure(
@@ -803,8 +885,18 @@ class CTFTimerApp(ctk.CTk):
             # Do NOT reset or clear target.
             # Timer stays at 00:00 (blinking), user can still Drop/Flag/+5 the current one.
 
-        overlay.after(4000, finish)
-        overlay.grab_set()
+        # Close button for manual dismiss (popup does not auto close)
+        close_btn = ctk.CTkButton(
+            inner,
+            text="✕ Close / Continue",
+            font=ctk.CTkFont(family="monospace", size=12),
+            fg_color=ACCENT_CRIMSON,
+            hover_color="#8b0000",  # darker crimson
+            command=lambda o=overlay: finish(o)
+        )
+        close_btn.pack()
+
+        # No grab_set: non-modal, user can interact with main window buttons below the banner
 
     def _set_all_controls_disabled(self, disabled: bool):
         state = "disabled" if disabled else "normal"
@@ -1113,6 +1205,65 @@ class CTFTimerApp(ctk.CTk):
             f'paplay "{self.plus5_path}"',
             f'pw-play "{self.plus5_path}"',
             f'aplay -q "{self.plus5_path}"',
+        ]
+        for cmd in cmds:
+            try:
+                rc = os.system(cmd + " 2>/dev/null")
+                if rc == 0:
+                    played = True
+                    break
+            except Exception:
+                continue
+        if not played:
+            try:
+                print("\a", end="", flush=True)
+            except Exception:
+                pass
+
+    # Start task sound (short positive "go" blip, like a game start)
+    def _ensure_start_sound(self):
+        self.start_path = os.path.join(tempfile.gettempdir(), "ouroboros_start.wav")
+        if not os.path.exists(self.start_path):
+            self._generate_start_sound(self.start_path)
+
+    def _generate_start_sound(self, path: str):
+        """Short positive start sound (~0.25s quick rising blips)."""
+        framerate = 44100
+        with wave.open(path, "w") as wf:
+            wf.setparams((1, 2, framerate, 0, "NONE", "not compressed"))
+            samples = []
+            tones = [
+                (800, 0.05),
+                (1050, 0.06),
+                (1300, 0.08),
+            ]
+            for freq, dur in tones:
+                for n in range(int(dur * framerate)):
+                    t = n / framerate
+                    val = 0.7 * math.sin(2 * math.pi * freq * t)
+                    val += 0.2 * math.sin(2 * math.pi * (freq * 1.5) * t)
+                    env = min(1.0, n / (0.01 * framerate)) * (1.0 - n / (dur * framerate))
+                    val *= env
+                    val = max(min(val, 0.85), -0.85)
+                    samples.append(int(val * 32767))
+                samples.extend([0] * int(0.015 * framerate))
+            for s in samples:
+                wf.writeframes(struct.pack("<h", s))
+
+    def _play_start_sound(self):
+        if not hasattr(self, "start_path") or not os.path.exists(self.start_path):
+            self._ensure_start_sound()
+        if not self.start_path or not os.path.exists(self.start_path):
+            try:
+                print("\a", end="", flush=True)
+            except Exception:
+                pass
+            return
+        played = False
+        cmds = [
+            f'paplay "{self.start_path}"',
+            f'pw-play "{self.start_path}"',
+            f'aplay -q "{self.start_path}"',
         ]
         for cmd in cmds:
             try:
