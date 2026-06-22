@@ -2,7 +2,7 @@
 """
 Ouroboros: CTF Tracker
 A minimalist, brutal timer for CTF players to enforce detachment.
-Break the cycle. Built with CustomTkinter. Audio via native Linux players (paplay/aplay).
+Built with CustomTkinter. Audio via native Linux players (paplay/aplay).
 """
 
 import customtkinter as ctk
@@ -71,6 +71,12 @@ class CTFTimerApp(ctk.CTk):
         self.minsize(920, 580)
         self.configure(fg_color=BG)
 
+        # Help some Linux environments / docks recognize the app name early
+        try:
+            self.tk.call("tk", "appname", "Ouroboros")
+        except Exception:
+            pass
+
         # Set window icon using bundled logo
         try:
             icon_path = get_asset_path("ouroboros_logo_128.png")
@@ -85,8 +91,10 @@ class CTFTimerApp(ctk.CTk):
         # alt-tab and .desktop files recognize the app as "Ouroboros"
         # instead of the default "Tk".
         try:
-            self.wm_class("Ouroboros", "Ouroboros")
+            self.tk.call('wm', 'class', self._w, 'Ouroboros')
             self.wm_iconname("Ouroboros: CTF Tracker")
+            # also set title explicitly
+            self.tk.call('wm', 'title', self._w, 'Ouroboros: CTF Tracker')
         except Exception:
             pass
 
@@ -104,8 +112,13 @@ class CTFTimerApp(ctk.CTk):
 
         self.buzzer_path: Optional[str] = None
         self._tick_job: Optional[str] = None
+        self.timed_out: bool = False
+        self._blink_job: Optional[str] = None
 
         self._ensure_buzzer()
+        self._ensure_success_sound()
+        self._ensure_drop_sound()
+        self._ensure_plus5_sound()
 
         # UI Setup
         self._setup_ui()
@@ -117,6 +130,44 @@ class CTFTimerApp(ctk.CTk):
         self._update_timer_display()
         self._update_action_buttons()
         self._refresh_sidebar()
+
+        # Dynamic timer font on resize
+        self._resize_job = None
+        self.bind("<Configure>", self._on_window_configure)
+        self.after(150, self._resize_timer_font)
+
+        # Force WM class after window is ready (helps some DEs show correct name instead of Tk)
+        self.after(100, self._force_wm_class)
+
+    def _force_wm_class(self):
+        try:
+            self.tk.call('wm', 'class', self._w, 'Ouroboros')
+        except Exception:
+            pass
+
+    def _on_window_configure(self, event):
+        if event.widget == self:
+            if self._resize_job:
+                self.after_cancel(self._resize_job)
+            self._resize_job = self.after(120, self._resize_timer_font)
+
+    def _resize_timer_font(self):
+        """Scale the big timer font based on the actual timer container size for perfect fit and centering."""
+        if not hasattr(self, 'timer_frame') or not self.timer_frame.winfo_exists():
+            return
+        try:
+            tw = self.timer_frame.winfo_width()
+            th = self.timer_frame.winfo_height()
+            if tw < 20 or th < 20:
+                return
+            # "20:00" ~5 chars. Conservative to ensure it always fits inside the box with margin.
+            # Use ~70% width / 6 for chars, 60% height.
+            font_size = max(20, min(200, int((tw * 0.70) / 6.0), int(th * 0.60)))
+            self.timer_label.configure(
+                font=ctk.CTkFont(family="monospace", size=font_size, weight="bold")
+            )
+        except Exception:
+            pass
 
     # ------------------- UI BUILD -------------------
     def _setup_ui(self):
@@ -130,7 +181,7 @@ class CTFTimerApp(ctk.CTk):
         main.grid(row=0, column=0, sticky="nsew", padx=(16, 8), pady=16)
         main.grid_columnconfigure(0, weight=1)
         # Give the timer (row 6) the majority of vertical space
-        main.grid_rowconfigure(6, weight=1)
+        main.grid_rowconfigure(5, weight=1)
 
         # Top branding: logo + title side by side
         top_branding = ctk.CTkFrame(main, fg_color="transparent")
@@ -155,17 +206,9 @@ class CTFTimerApp(ctk.CTk):
         )
         header.grid(row=0, column=1, sticky="w")
 
-        sub = ctk.CTkLabel(
-            main,
-            text="Break the cycle. See the truth.",
-            font=ctk.CTkFont(size=12),
-            text_color=TEXT_MUTED
-        )
-        sub.grid(row=1, column=0, sticky="w", pady=(0, 14))
-
         # Mode selector
         mode_frame = ctk.CTkFrame(main, fg_color="transparent")
-        mode_frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        mode_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         mode_frame.grid_columnconfigure((0, 1), weight=1)
 
         self.mode_var = ctk.StringVar(value="20:00")
@@ -204,15 +247,15 @@ class CTFTimerApp(ctk.CTk):
             font=ctk.CTkFont(family="monospace", size=11),
             text_color=TEXT_MUTED
         )
-        target_label.grid(row=3, column=0, sticky="w", pady=(8, 2))
+        target_label.grid(row=2, column=0, sticky="w", pady=(8, 2))
 
         entry_row = ctk.CTkFrame(main, fg_color="transparent")
-        entry_row.grid(row=4, column=0, sticky="ew", pady=(0, 8))
+        entry_row.grid(row=3, column=0, sticky="ew", pady=(0, 8))
         entry_row.grid_columnconfigure(0, weight=1)
 
         self.target_entry = ctk.CTkEntry(
             entry_row,
-            placeholder_text="e.g.  SQLi — Union / Blind  or  SSRF — AWS Metadata",
+            placeholder_text="Enter target name or category",
             font=ctk.CTkFont(family="monospace", size=13),
             fg_color=ENTRY_BG,
             border_color="#333333",
@@ -248,23 +291,27 @@ class CTFTimerApp(ctk.CTk):
             height=44,
             command=self.start_timer
         )
-        self.start_btn.grid(row=5, column=0, sticky="ew", pady=(0, 16))
+        self.start_btn.grid(row=4, column=0, sticky="ew", pady=(0, 16))
 
         # Timer display
         timer_frame = ctk.CTkFrame(main, fg_color=SIDEBAR_BG, corner_radius=8)
-        timer_frame.grid(row=6, column=0, sticky="nsew", pady=(4, 12))
+        timer_frame.grid(row=5, column=0, sticky="nsew", pady=(4, 12))
         timer_frame.grid_columnconfigure(0, weight=1)
         timer_frame.grid_rowconfigure(0, weight=1)
+        timer_frame.grid_rowconfigure(1, weight=0)  # active label small
 
-        timer_font = self._get_monospace_font(105)
+        # Temporary font; will be resized dynamically
         self.timer_label = ctk.CTkLabel(
             timer_frame,
             text="20:00",
-            font=timer_font,
+            font=ctk.CTkFont(family="monospace", size=60, weight="bold"),
             text_color=TEXT_MUTED,
-            pady=28
+            justify="center",
+            anchor="center"
         )
-        self.timer_label.grid(row=0, column=0, sticky="ew")
+        self.timer_label.grid(row=0, column=0, sticky="nsew")
+        self.timer_frame = timer_frame  # for resize calculations
+        self.timer_frame.bind("<Configure>", lambda e: self.after(80, self._resize_timer_font))
 
         # Active problem display
         self.active_label = ctk.CTkLabel(
@@ -277,7 +324,7 @@ class CTFTimerApp(ctk.CTk):
 
         # Action buttons
         actions = ctk.CTkFrame(main, fg_color="transparent")
-        actions.grid(row=7, column=0, sticky="ew")
+        actions.grid(row=6, column=0, sticky="ew")
         actions.grid_columnconfigure((0, 1, 2), weight=1)
 
         self.flag_btn = ctk.CTkButton(
@@ -318,16 +365,18 @@ class CTFTimerApp(ctk.CTk):
 
         # Bottom bar: always on top + status
         bottom = ctk.CTkFrame(main, fg_color="transparent")
-        bottom.grid(row=8, column=0, sticky="ew", pady=(14, 0))
+        bottom.grid(row=7, column=0, sticky="ew", pady=(14, 0))
 
         self.topmost_var = ctk.BooleanVar(value=False)
         self.topmost_switch = ctk.CTkSwitch(
             bottom,
             text="Always on Top",
-            font=ctk.CTkFont(family="monospace", size=12),
+            font=ctk.CTkFont(family="monospace", size=10),
             text_color=TEXT_MUTED,
             variable=self.topmost_var,
-            command=self._toggle_topmost
+            command=self._toggle_topmost,
+            width=45,
+            height=22
         )
         self.topmost_switch.grid(row=0, column=0, sticky="w")
 
@@ -440,6 +489,22 @@ class CTFTimerApp(ctk.CTk):
         s = max(0, secs) % 60
         return f"{m:02d}:{s:02d}"
 
+    def _start_blink(self):
+        """Start blinking the 00:00 after timeout."""
+        if getattr(self, 'timed_out', False):
+            self._blink_state = True
+            if self._blink_job:
+                self.after_cancel(self._blink_job)
+            self._do_blink()
+
+    def _do_blink(self):
+        if not getattr(self, 'timed_out', False) or self.remaining_seconds != 0:
+            return
+        color = ACCENT_CRIMSON if getattr(self, '_blink_state', True) else "#555555"
+        self.timer_label.configure(text_color=color)
+        self._blink_state = not getattr(self, '_blink_state', True)
+        self._blink_job = self.after(500, self._do_blink)
+
     def _get_monospace_font(self, size: int):
         """Try common programming fonts that exist on most Linux systems."""
         candidates = [
@@ -462,6 +527,8 @@ class CTFTimerApp(ctk.CTk):
 
     def _update_action_buttons(self):
         running = self.is_running
+        post_timeout = getattr(self, 'timed_out', False) and bool(self.current_target)
+        can_act = running or post_timeout
 
         # Start button
         if running:
@@ -469,23 +536,23 @@ class CTFTimerApp(ctk.CTk):
         else:
             self.start_btn.configure(state="normal", text="START TIMER")
 
-        # Action buttons
-        state = "normal" if running else "disabled"
+        # Action buttons: allow after timeout too (user can still flag/drop/+5)
+        state = "normal" if can_act else "disabled"
         self.flag_btn.configure(state=state)
         self.drop_btn.configure(state=state)
 
-        # +5 only if running and not used
-        if running and not self.extension_used:
+        # +5 if can act and not used (even post-timeout)
+        if can_act and not self.extension_used:
             self.plus5_btn.configure(state="normal")
         else:
             self.plus5_btn.configure(state="disabled")
 
-        # Mode buttons disabled while running
-        mstate = "disabled" if running else "normal"
+        # Mode buttons disabled while running or post-timeout (active problem)
+        mstate = "disabled" if can_act else "normal"
         self.mode_btn_20.configure(state=mstate)
         self.mode_btn_10.configure(state=mstate)
 
-        # Target entry
+        # Target entry: only lock while actively running; allow edit post-timeout to start fresh if desired
         if running:
             self.target_entry.configure(state="disabled")
         else:
@@ -504,6 +571,13 @@ class CTFTimerApp(ctk.CTk):
             self.after(1800, lambda: self.status_label.configure(text=""))
             return
 
+        # If abandoning a timed-out problem by starting new, auto-ghost it
+        if getattr(self, 'timed_out', False) and self.current_target:
+            elapsed = self._get_elapsed_seconds()
+            time_str = self._format_time(elapsed)
+            self.ghosts.append((self.current_target, f"{time_str} timeout"))
+            self._refresh_sidebar()
+
         # Capture
         self.current_target = target
         self.initial_seconds = self.default_seconds
@@ -511,6 +585,10 @@ class CTFTimerApp(ctk.CTk):
         self.problem_start_time = time.time()
         self.extension_used = False
         self.is_running = True
+        self.timed_out = False
+        if self._blink_job:
+            self.after_cancel(self._blink_job)
+            self._blink_job = None
 
         self._set_active_display(f"▶ {self.current_target}")
         self._update_timer_display()
@@ -543,6 +621,10 @@ class CTFTimerApp(ctk.CTk):
         if self._tick_job:
             self.after_cancel(self._tick_job)
             self._tick_job = None
+        if self._blink_job:
+            self.after_cancel(self._blink_job)
+            self._blink_job = None
+        self.timed_out = False
 
         # Reset visual timer to current mode default for next run
         self.remaining_seconds = self.default_seconds
@@ -558,20 +640,33 @@ class CTFTimerApp(ctk.CTk):
         self._set_active_display("")
         self.extension_used = False
         self.problem_start_time = None
+        self.timed_out = False
+        if self._blink_job:
+            self.after_cancel(self._blink_job)
+            self._blink_job = None
 
     # ------------------- ACTIONS -------------------
     def add_five_minutes(self):
-        if not self.is_running or self.extension_used:
+        if not (self.is_running or getattr(self, 'timed_out', False)) or self.extension_used:
             return
+        was_post_timeout = not self.is_running and getattr(self, 'timed_out', False)
         self.remaining_seconds += 5 * 60
         self.extension_used = True
+        self.timed_out = False
+        if self._blink_job:
+            self.after_cancel(self._blink_job)
+            self._blink_job = None
+        if was_post_timeout:
+            self.is_running = True
+            self._schedule_tick()
         self._update_timer_display()
         self._update_action_buttons()
+        self._play_plus5_sound()
         self.status_label.configure(text="+5 added (locked for this problem)", text_color=ACCENT_AMBER)
-        self.after(1600, lambda: self.status_label.configure(text="") if not self.is_running else None)
+        self.after(1600, lambda: self.status_label.configure(text="") if not (self.is_running or self.timed_out) else None)
 
     def flag_captured(self):
-        if not self.is_running:
+        if not (self.is_running or getattr(self, 'timed_out', False)):
             return
 
         name = self.current_target
@@ -581,11 +676,18 @@ class CTFTimerApp(ctk.CTk):
         self.kills.append((name, time_str))
         self._refresh_sidebar()
 
+        # Play positive success sound (Mario-style)
+        self._play_success_sound()
+
+        self.timed_out = False
+        if self._blink_job:
+            self.after_cancel(self._blink_job)
+            self._blink_job = None
         self.stop_timer(clear_current=True)
         self._update_timer_display()  # reset color
 
     def drop_and_flag(self):
-        if not self.is_running:
+        if not (self.is_running or getattr(self, 'timed_out', False)):
             return
 
         name = self.current_target
@@ -595,6 +697,13 @@ class CTFTimerApp(ctk.CTk):
         self.ghosts.append((name, time_str))
         self._refresh_sidebar()
 
+        # Play drop sound
+        self._play_drop_sound()
+
+        self.timed_out = False
+        if self._blink_job:
+            self.after_cancel(self._blink_job)
+            self._blink_job = None
         self.stop_timer(clear_current=True)
         self._update_timer_display()
 
@@ -611,20 +720,17 @@ class CTFTimerApp(ctk.CTk):
             self.after_cancel(self._tick_job)
             self._tick_job = None
 
-        # Add to ghosts automatically
-        if self.current_target:
-            elapsed = self._get_elapsed_seconds()
-            time_str = self._format_time(elapsed)
-            self.ghosts.append((self.current_target, f"{time_str} timeout"))
-            self._refresh_sidebar()
-
-        # Visual: harsh red + 00:00
+        # Visual: harsh red + 00:00 (do NOT auto-add to ghosts; let user decide)
         self.remaining_seconds = 0
+        self.timed_out = True
         self._update_timer_display(force_color=ACCENT_CRIMSON)
         self._update_action_buttons()
 
         # Play sound
         self._play_buzzer()
+
+        # Start blinking the zero
+        self._start_blink()
 
         # Lock UI + modal overlay for 3 seconds
         self._show_ego_overlay()
@@ -638,54 +744,62 @@ class CTFTimerApp(ctk.CTk):
         overlay.attributes("-topmost", True)
         overlay.configure(fg_color=BG)
 
-        # Center it relative to main window
+        # Larger size, scaled for HiDPI, centered on screen for prominent "windowed fullscreen" feel
+        scale = float(os.environ.get("CTF_TIMER_SCALE", "1.35"))
+        popup_width = int(800 * scale)
+        popup_height = int(340 * scale)
         self.update_idletasks()
-        x = self.winfo_x() + (self.winfo_width() // 2) - 280
-        y = self.winfo_y() + (self.winfo_height() // 2) - 110
-        overlay.geometry(f"560x220+{x}+{y}")
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        x = (screen_w - popup_width) // 2
+        y = (screen_h - popup_height) // 2
+        overlay.geometry(f"{popup_width}x{popup_height}+{x}+{y}")
 
-        # Content
+        # Use inner frame for better alignment/padding
+        inner = ctk.CTkFrame(overlay, fg_color=BG)
+        inner.pack(expand=True, fill="both", padx=30, pady=25)
+
+        # Content - larger fonts for readability
         title = ctk.CTkLabel(
-            overlay,
+            inner,
             text="⏱  TIME'S UP",
-            font=ctk.CTkFont(family="monospace", size=22, weight="bold"),
+            font=ctk.CTkFont(family="monospace", size=26, weight="bold"),
             text_color=ACCENT_CRIMSON
         )
-        title.pack(pady=(22, 6))
+        title.pack(pady=(0, 10))
 
         message = random.choice(EGO_LINES)
         msg_label = ctk.CTkLabel(
-            overlay,
+            inner,
             text=message,
-            font=ctk.CTkFont(family="monospace", size=13),
+            font=ctk.CTkFont(family="monospace", size=14),
             text_color=TEXT_LIGHT,
-            wraplength=500,
+            wraplength=popup_width - 120,
             justify="center"
         )
-        msg_label.pack(pady=(4, 18), padx=20)
+        msg_label.pack(pady=(0, 15), padx=15)
 
         hint = ctk.CTkLabel(
-            overlay,
-            text="3 second circuit breaker active.",
-            font=ctk.CTkFont(size=10),
+            inner,
+            text="4 second circuit breaker active.",
+            font=ctk.CTkFont(size=11),
             text_color=TEXT_MUTED
         )
         hint.pack()
 
-        # Auto close + re-enable
+        # Auto close + re-enable (keep timer at 00:00 blinking, allow user to act)
         def finish():
             try:
                 overlay.destroy()
             except Exception:
                 pass
             self._set_all_controls_disabled(False)
-            # Reset timer to default + normal color
-            self.remaining_seconds = self.default_seconds
-            self._update_timer_display()  # normal color
-            # After brutal timeout, clear the current target to discourage immediate retry
-            self._clear_current_problem()
+            # restore correct per-state button enables (post-timeout allows actions)
+            self._update_action_buttons()
+            # Do NOT reset or clear target.
+            # Timer stays at 00:00 (blinking), user can still Drop/Flag/+5 the current one.
 
-        overlay.after(3000, finish)
+        overlay.after(4000, finish)
         overlay.grab_set()
 
     def _set_all_controls_disabled(self, disabled: bool):
@@ -771,17 +885,17 @@ class CTFTimerApp(ctk.CTk):
             self._generate_buzzer(self.buzzer_path)
 
     def _generate_buzzer(self, path: str):
-        """Generate a harsh, jarring multi-beep buzzer (stdlib only)."""
+        """Generate a harsh, jarring multi-beep buzzer (stdlib only). ~4.5s"""
         framerate = 44100
-        # ~1.6s total: 5 short harsh bursts
+        # ~4.5s total: many short harsh bursts
         with wave.open(path, "w") as wf:
             wf.setparams((1, 2, framerate, 0, "NONE", "not compressed"))
             samples = []
             freqs = [980, 1240, 920, 1350]  # harsh alternating
-            beep_len = int(0.135 * framerate)
-            gap_len = int(0.085 * framerate)
+            beep_len = int(0.12 * framerate)
+            gap_len = int(0.08 * framerate)
 
-            for i in range(5):
+            for i in range(18):
                 f = freqs[i % len(freqs)]
                 # Basic sine + light distortion for harshness
                 for n in range(beep_len):
@@ -822,6 +936,188 @@ class CTFTimerApp(ctk.CTk):
             except Exception:
                 continue
 
+        if not played:
+            try:
+                print("\a", end="", flush=True)
+            except Exception:
+                pass
+
+    # ------------------- SUCCESS SOUND FOR FLAG CAPTURED (Mario-like) -------------------
+    def _ensure_success_sound(self):
+        self.success_path = os.path.join(tempfile.gettempdir(), "ouroboros_success.wav")
+        if not os.path.exists(self.success_path):
+            self._generate_success_sound(self.success_path)
+
+    def _generate_success_sound(self, path: str):
+        """Short positive Mario-style success chime (~0.6s ascending tones)."""
+        framerate = 44100
+        with wave.open(path, "w") as wf:
+            wf.setparams((1, 2, framerate, 0, "NONE", "not compressed"))
+            samples = []
+            # Ascending bright tones for coin / success feel
+            tones = [
+                (700, 0.07),
+                (900, 0.07),
+                (1100, 0.09),
+                (1300, 0.12),
+            ]
+            for freq, dur in tones:
+                for n in range(int(dur * framerate)):
+                    t = n / framerate
+                    # main tone + slight higher harmonic for "ding"
+                    val = 0.65 * math.sin(2 * math.pi * freq * t)
+                    val += 0.25 * math.sin(2 * math.pi * (freq * 1.5) * t)
+                    # quick attack/decay envelope
+                    env = min(1.0, n / (0.01 * framerate)) * (1.0 - (n / (dur * framerate)))
+                    val *= env
+                    val = max(min(val, 0.9), -0.9)
+                    samples.append(int(val * 32767))
+                # tiny separation
+                samples.extend([0] * int(0.02 * framerate))
+            for s in samples:
+                wf.writeframes(struct.pack("<h", s))
+
+    def _play_success_sound(self):
+        if not hasattr(self, "success_path") or not os.path.exists(self.success_path):
+            self._ensure_success_sound()
+        if not self.success_path or not os.path.exists(self.success_path):
+            try:
+                print("\a", end="", flush=True)
+            except Exception:
+                pass
+            return
+        played = False
+        cmds = [
+            f'paplay "{self.success_path}"',
+            f'pw-play "{self.success_path}"',
+            f'aplay -q "{self.success_path}"',
+        ]
+        for cmd in cmds:
+            try:
+                rc = os.system(cmd + " 2>/dev/null")
+                if rc == 0:
+                    played = True
+                    break
+            except Exception:
+                continue
+        if not played:
+            try:
+                print("\a", end="", flush=True)
+            except Exception:
+                pass
+
+    # Drop sound (short low "thud" for Drop & Flag)
+    def _ensure_drop_sound(self):
+        self.drop_path = os.path.join(tempfile.gettempdir(), "ouroboros_drop.wav")
+        if not os.path.exists(self.drop_path):
+            self._generate_drop_sound(self.drop_path)
+
+    def _generate_drop_sound(self, path: str):
+        """Short low descending tone for drop action."""
+        framerate = 44100
+        with wave.open(path, "w") as wf:
+            wf.setparams((1, 2, framerate, 0, "NONE", "not compressed"))
+            samples = []
+            # Low descending for "drop"
+            tones = [
+                (350, 0.1),
+                (280, 0.12),
+                (220, 0.15),
+            ]
+            for freq, dur in tones:
+                for n in range(int(dur * framerate)):
+                    t = n / framerate
+                    val = 0.6 * math.sin(2 * math.pi * freq * t)
+                    val += 0.15 * math.sin(2 * math.pi * freq * 0.5 * t)
+                    env = (1.0 - (n / (dur * framerate))) * 0.9
+                    val *= env
+                    val = max(min(val, 0.7), -0.7)
+                    samples.append(int(val * 32767))
+                samples.extend([0] * int(0.03 * framerate))
+            for s in samples:
+                wf.writeframes(struct.pack("<h", s))
+
+    def _play_drop_sound(self):
+        if not hasattr(self, "drop_path") or not os.path.exists(self.drop_path):
+            self._ensure_drop_sound()
+        if not self.drop_path or not os.path.exists(self.drop_path):
+            try:
+                print("\a", end="", flush=True)
+            except Exception:
+                pass
+            return
+        played = False
+        cmds = [
+            f'paplay "{self.drop_path}"',
+            f'pw-play "{self.drop_path}"',
+            f'aplay -q "{self.drop_path}"',
+        ]
+        for cmd in cmds:
+            try:
+                rc = os.system(cmd + " 2>/dev/null")
+                if rc == 0:
+                    played = True
+                    break
+            except Exception:
+                continue
+        if not played:
+            try:
+                print("\a", end="", flush=True)
+            except Exception:
+                pass
+
+    # +5 Min sound (short positive "up" tone)
+    def _ensure_plus5_sound(self):
+        self.plus5_path = os.path.join(tempfile.gettempdir(), "ouroboros_plus5.wav")
+        if not os.path.exists(self.plus5_path):
+            self._generate_plus5_sound(self.plus5_path)
+
+    def _generate_plus5_sound(self, path: str):
+        """Short positive up tone for +5 Min (like power-up)."""
+        framerate = 44100
+        with wave.open(path, "w") as wf:
+            wf.setparams((1, 2, framerate, 0, "NONE", "not compressed"))
+            samples = []
+            tones = [
+                (600, 0.06),
+                (850, 0.08),
+            ]
+            for freq, dur in tones:
+                for n in range(int(dur * framerate)):
+                    t = n / framerate
+                    val = 0.65 * math.sin(2 * math.pi * freq * t)
+                    val += 0.2 * math.sin(2 * math.pi * (freq * 1.6) * t)
+                    env = min(1.0, n / (0.01 * framerate)) * (1.0 - n / (dur * framerate) * 0.7)
+                    val *= env
+                    val = max(min(val, 0.8), -0.8)
+                    samples.append(int(val * 32767))
+                samples.extend([0] * int(0.02 * framerate))
+            for s in samples:
+                wf.writeframes(struct.pack("<h", s))
+
+    def _play_plus5_sound(self):
+        if not hasattr(self, "plus5_path") or not os.path.exists(self.plus5_path):
+            self._ensure_plus5_sound()
+        if not self.plus5_path or not os.path.exists(self.plus5_path):
+            try:
+                print("\a", end="", flush=True)
+            except Exception:
+                pass
+            return
+        played = False
+        cmds = [
+            f'paplay "{self.plus5_path}"',
+            f'pw-play "{self.plus5_path}"',
+            f'aplay -q "{self.plus5_path}"',
+        ]
+        for cmd in cmds:
+            try:
+                rc = os.system(cmd + " 2>/dev/null")
+                if rc == 0:
+                    played = True
+                    break
+            except Exception:
+                continue
         if not played:
             try:
                 print("\a", end="", flush=True)
