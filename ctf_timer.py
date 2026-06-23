@@ -50,24 +50,27 @@ def get_asset_path(filename: str) -> str:
 
 class CTFTimerApp(ctk.CTk):
     def __init__(self):
-        super().__init__()
+        # className is critical: sets the initial WM_CLASS so Linux dock/launcher
+        # never sees the default "Tk" (even briefly). Must be first thing.
+        super().__init__(className="Ouroboros")
 
-        # Set app class name *very early* so Linux (and some other) window managers
-        # and launchers see "Ouroboros" instead of "Tk" for the icon/name.
+        # Set app class name and title *immediately* after creation.
+        # className= on the CTk() constructor + repeated tk.call is the permanent
+        # way to get "Ouroboros" (not "Tk") for Fedora/GNOME dock + .desktop matching.
         try:
-            self.tk.call('wm', 'class', self._w, 'Ouroboros')
+            self.tk.call("tk", "appname", "Ouroboros")
+            self.tk.call("wm", "title", self._w, "Ouroboros: CTF Tracker")
+            self.title("Ouroboros: CTF Tracker")
+            self.wm_iconname("Ouroboros: CTF Tracker")
         except Exception:
             pass
 
         # Force Tk scaling as early as possible (helps on some Linux setups)
         try:
-            import os
             scale = float(os.environ.get("CTF_TIMER_SCALE", "1.35"))
             self.tk.call("tk", "scaling", scale)
         except Exception:
             pass
-
-        self.title("Ouroboros: CTF Tracker")
 
         # Auto-choose a good initial window size based on screen for best timer display
         # (avoids tiny font or cutoff on launch/fullscreen scenarios)
@@ -82,35 +85,32 @@ class CTFTimerApp(ctk.CTk):
         self.minsize(920, 580)
         self.configure(fg_color=BG)
 
-        # Help some Linux environments / docks recognize the app name early
-        try:
-            self.tk.call("tk", "appname", "Ouroboros")
-        except Exception:
-            pass
-
-        # Set window icon using bundled logo
+        # Set window icon using bundled logo (True = default for WM)
         try:
             icon_path = get_asset_path("ouroboros_logo_128.png")
             if os.path.exists(icon_path):
                 icon = tk.PhotoImage(file=icon_path)
-                self.iconphoto(False, icon)
+                self.iconphoto(True, icon)
                 self._icon_ref = icon  # keep reference
         except Exception:
             pass
 
-        # Set WM_CLASS + icon name so Linux desktop environments, docks,
-        # alt-tab and .desktop files recognize the app as "Ouroboros"
-        # instead of the default "Tk".
+        # Extra sets right after icon (belt and suspenders)
         try:
-            self.tk.call('wm', 'class', self._w, 'Ouroboros')
-            self.wm_iconname("Ouroboros: CTF Tracker")
-            # also set title explicitly
-            self.tk.call('wm', 'title', self._w, 'Ouroboros: CTF Tracker')
+            self.tk.call("tk", "appname", "Ouroboros")
+            self.tk.call("wm", "title", self._w, "Ouroboros: CTF Tracker")
+            self.title("Ouroboros: CTF Tracker")
         except Exception:
             pass
 
-        # Re-apply a bit later to ensure it sticks (helps some WMs and after mapping)
-        self.after(150, lambda: self.tk.call('wm', 'class', self._w, 'Ouroboros') if hasattr(self, '_w') else None)
+        # Re-apply aggressively at multiple points after mapping (this is what finally
+        # defeats any race where WM sees "Tk" on first realize). These cover most DEs.
+        self.after_idle(self._force_wm_class)
+        self.after(0, self._force_wm_class)
+        self.after(50, self._force_wm_class)
+        self.after(120, self._force_wm_class)
+        self.after(300, self._force_wm_class)
+        self.after(700, self._force_wm_class)
 
         # State
         self.default_seconds: int = 20 * 60
@@ -139,6 +139,10 @@ class CTFTimerApp(ctk.CTk):
         # UI Setup
         self._setup_ui()
 
+        # Force correct title late (CTk unconditionally does self.title("CTk") inside its __init__)
+        self.title("Ouroboros: CTF Tracker")
+        self.tk.call("wm", "title", self._w, "Ouroboros: CTF Tracker")
+
         # Close handler for persistence
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
@@ -152,12 +156,18 @@ class CTFTimerApp(ctk.CTk):
         self.bind("<Configure>", self._on_window_configure)
         self.after(150, self._resize_timer_font)
 
-        # Force WM class after window is ready (helps some DEs show correct name instead of Tk)
-        self.after(100, self._force_wm_class)
+        # Extra late title force (CTk can be stubborn)
+        self.after(400, lambda: self.title("Ouroboros: CTF Tracker"))
 
     def _force_wm_class(self):
+        """Aggressively force correct WM_CLASS (via className ctor) + title.
+        Called many times so it sticks after CustomTkinter init and window mapping.
+        This + build auto-install permanently fixes "Tk" + poor icon on Fedora."""
         try:
-            self.tk.call('wm', 'class', self._w, 'Ouroboros')
+            self.tk.call("tk", "appname", "Ouroboros")
+            self.tk.call("wm", "title", self._w, "Ouroboros: CTF Tracker")
+            self.title("Ouroboros: CTF Tracker")
+            self.wm_iconname("Ouroboros: CTF Tracker")
         except Exception:
             pass
 
@@ -1294,6 +1304,12 @@ def main():
     ctk.set_window_scaling(1.0)
 
     app = CTFTimerApp()
+    # Final safety net for title (dock uses .desktop Name anyway, but titlebar should be correct)
+    try:
+        app.title("Ouroboros: CTF Tracker")
+        app.tk.call("wm", "title", app._w, "Ouroboros: CTF Tracker")
+    except Exception:
+        pass
     app.mainloop()
 
 
